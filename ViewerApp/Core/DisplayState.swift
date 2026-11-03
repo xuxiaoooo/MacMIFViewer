@@ -20,7 +20,11 @@ struct DisplayChannel: Codable, Equatable, Sendable {
     var low: Float = 0
     var high: Float
     var gamma: Float = 1
+    var brightness: Float?
     let ceiling: Float
+
+    static let brightnessRange: ClosedRange<Float> = 0...2
+    var brightnessGain: Float { brightness ?? 1 }
 
     static func defaults(_ info: SlideInfo) -> [Self] {
         let colors: [SIMD3<Float>] = [
@@ -59,11 +63,15 @@ struct DisplayChannel: Codable, Equatable, Sendable {
     func mapped(_ sample: Float) -> SIMD3<Float> {
         let t = min(1, max(0, (sample - low) / max(1, high - low)))
         let intensity = powf(t, 1 / gamma)
+        let rgb: SIMD3<Float>
         switch palette {
-        case .tint: return color * intensity
-        case .grayscale: return SIMD3(repeating: intensity)
-        case .heat: return simd_clamp(SIMD3(repeating: 3 * intensity) - SIMD3(0, 1, 2), .zero, .one)
+        case .tint: rgb = color * intensity
+        case .grayscale: rgb = SIMD3(repeating: intensity)
+        case .heat: rgb = simd_clamp(SIMD3(repeating: 3 * intensity) - SIMD3(0, 1, 2), .zero, .one)
         }
+        let brightened = rgb * brightnessGain
+        // Cap the whole color together so boosting a channel preserves its hue.
+        return brightened / max(1, brightened.x, brightened.y, brightened.z)
     }
 }
 

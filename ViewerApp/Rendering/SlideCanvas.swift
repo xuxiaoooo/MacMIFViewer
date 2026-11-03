@@ -217,7 +217,7 @@ final class SlideMetalView: MTKView, MTKViewDelegate {
             let on = model.solo.map { $0 == index } ?? style.visible
             return Uniform(color: SIMD4(style.color, Float(style.palette.rawValue)),
                            mapping: SIMD4(style.low / style.ceiling, style.high / style.ceiling,
-                                          1 / style.gamma, on ? 1 : 0))
+                                          1 / style.gamma, on ? style.brightnessGain : 0))
         }
         styles += Array(repeating: Uniform(color: .zero, mapping: SIMD4(0, 1, 1, 0)), count: 8 - styles.count)
         styles.withUnsafeBytes { encoder.setFragmentBytes($0.baseAddress!, length: $0.count, index: 0) }

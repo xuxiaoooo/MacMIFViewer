@@ -8,7 +8,7 @@ struct VertexOut {
 
 struct ChannelUniform {
     float4 color;
-    float4 mapping; // normalized min, max, exponent, enabled
+    float4 mapping; // normalized min, max, exponent, visible brightness gain
 };
 
 vertex VertexOut slide_vertex(uint i [[vertex_id]], constant float4 *vertices [[buffer(0)]]) {
@@ -30,9 +30,12 @@ fragment float4 slide_fragment(VertexOut in [[stage_in]],
             float scaled = clamp((sample - transform.x) / (transform.y - transform.x), 0.0, 1.0);
             float intensity = pow(scaled, transform.z);
             float4 palette = style[i].color;
-            if (palette.w == 1.0) rgb += float3(intensity);
-            else if (palette.w == 2.0) rgb += saturate(3.0 * intensity - float3(0, 1, 2));
-            else rgb += palette.rgb * intensity;
+            float3 channel;
+            if (palette.w == 1.0) channel = float3(intensity);
+            else if (palette.w == 2.0) channel = saturate(3.0 * intensity - float3(0, 1, 2));
+            else channel = palette.rgb * intensity;
+            channel *= transform.w;
+            rgb += channel / max(1.0, max(channel.r, max(channel.g, channel.b)));
         }
     }
     return float4(saturate(rgb), 1.0);

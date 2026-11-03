@@ -164,6 +164,7 @@ final class ViewerModel: ObservableObject {
                        zip(saved.settings, displayDefaults).allSatisfy({ style, baseline in
                            style.ceiling == baseline.ceiling && style.low >= 0 && style.high <= style.ceiling
                                && style.high - style.low >= 1 && (0.15...4).contains(style.gamma)
+                               && DisplayChannel.brightnessRange.contains(style.brightnessGain)
                                && (0...1).contains(style.color.x) && (0...1).contains(style.color.y)
                                && (0...1).contains(style.color.z)
                        }) {

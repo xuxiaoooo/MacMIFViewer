@@ -322,35 +322,45 @@ struct Workspace: View {
     private func row(_ index: Int) -> some View {
         let channel = model.reader!.info.channels[index]
         let style = model.settings[index]
-        return HStack(spacing: 8) {
-            Button {
-                model.settings[index].visible.toggle()
-            } label: {
-                Image(systemName: style.visible ? "eye.fill" : "eye.slash")
-                    .foregroundStyle(style.visible ? accent : .secondary)
+        let brightness = Binding(
+            get: { model.settings[index].brightnessGain },
+            set: { model.settings[index].brightness = $0 }
+        )
+        return VStack(spacing: 5) {
+            HStack(spacing: 8) {
+                Button {
+                    model.settings[index].visible.toggle()
+                } label: {
+                    Image(systemName: style.visible ? "eye.fill" : "eye.slash")
+                        .foregroundStyle(style.visible ? accent : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help("切换通道可见性")
+                Button {
+                    model.selection = index
+                } label: {
+                    HStack(spacing: 7) {
+                        Circle().fill(swatch(style.color)).frame(width: 8, height: 8)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(channel.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                            Text(channel.source + "  ·  " + channel.type.rawValue)
+                                .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                    }.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                Button(model.solo == index ? "单显中" : "单显") {
+                    model.solo = model.solo == index ? nil : index
+                    model.selection = index
+                }
+                .font(.system(size: 9))
+                .help("只显示当前通道")
             }
-            .buttonStyle(.plain)
-            .help("切换通道可见性")
-            Button {
-                model.selection = index
-            } label: {
-                HStack(spacing: 7) {
-                    Circle().fill(swatch(style.color)).frame(width: 8, height: 8)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(channel.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
-                        Text(channel.source + "  ·  " + channel.type.rawValue)
-                            .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
-                }.contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            Button(model.solo == index ? "单显中" : "单显") {
-                model.solo = model.solo == index ? nil : index
-                model.selection = index
-            }
-            .font(.system(size: 9))
-            .help("只显示当前通道")
+            slider("亮度", value: brightness, range: DisplayChannel.brightnessRange,
+                   display: "\(Int((style.brightnessGain * 100).rounded()))%",
+                   tint: style.palette == .tint ? swatch(style.color) : accent,
+                   accessibilityName: channel.name + "亮度")
         }
         .padding(7)
         .background(model.selection == index ? accent.opacity(0.10) : Color.white.opacity(0.026),
@@ -391,35 +401,32 @@ struct Workspace: View {
                 ForEach(DisplayChannel.Palette.allCases, id: \.self) { Text($0.label).tag($0) }
             }.labelsHidden().pickerStyle(.segmented)
             if style.palette == .tint {
-            HStack {
-                Text(model.reader?.info.channels[i].name ?? "当前通道")
-                    .font(.caption.weight(.semibold)).lineLimit(1)
-                Spacer()
-                ColorPicker("自定义伪彩", selection: color, supportsOpacity: false)
-                    .labelsHidden()
-                    .help("打开系统色板")
-            }
-            HStack(spacing: 8) {
-                ForEach(channelPalette.indices, id: \.self) { index in
-                    let preset = channelPalette[index]
-                    Button {
-                        model.settings[i].color = preset.rgb
-                    } label: {
-                        Circle().fill(swatch(preset.rgb))
-                            .frame(width: 14, height: 14)
-                            .padding(4)
-                            .overlay {
-                                Circle().strokeBorder(style.color == preset.rgb ? .white : edge, lineWidth: 1)
-                            }
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("预设" + preset.name)
-                    .help(preset.name + "色")
+                HStack {
+                    Text(model.reader?.info.channels[i].name ?? "当前通道")
+                        .font(.caption.weight(.semibold)).lineLimit(1)
+                    Spacer()
+                    ColorPicker("自定义伪彩", selection: color, supportsOpacity: false)
+                        .labelsHidden()
+                        .help("打开系统色板")
                 }
-            }
-            rgbSlider("红色", component: 0, channel: i, tint: .red)
-            rgbSlider("绿色", component: 1, channel: i, tint: .green)
-            rgbSlider("蓝色", component: 2, channel: i, tint: .blue)
+                HStack(spacing: 8) {
+                    ForEach(channelPalette.indices, id: \.self) { index in
+                        let preset = channelPalette[index]
+                        Button {
+                            model.settings[i].color = preset.rgb
+                        } label: {
+                            Circle().fill(swatch(preset.rgb))
+                                .frame(width: 14, height: 14)
+                                .padding(4)
+                                .overlay {
+                                    Circle().strokeBorder(style.color == preset.rgb ? .white : edge, lineWidth: 1)
+                                }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("预设" + preset.name)
+                        .help(preset.name + "色")
+                    }
+                }
             }
             Divider()
             slider("黑点", value: low, range: 0...style.ceiling, display: String(Int(style.low)))
@@ -429,22 +436,12 @@ struct Workspace: View {
         }
     }
 
-    private func rgbSlider(_ label: String, component: Int, channel: Int, tint: Color) -> some View {
-        let value = Binding(
-            get: { model.settings[channel].color[component] * 255 },
-            set: { model.settings[channel].color[component] = min(255, max(0, $0.rounded())) / 255 }
-        )
-        return slider(label, value: value, range: 0...255,
-                      display: String(Int(value.wrappedValue.rounded())), tint: tint)
-    }
-
     private func slider(_ label: String, value: Binding<Float>, range: ClosedRange<Float>,
-                        display: String, tint: Color = accent) -> some View {
+                        display: String, tint: Color = accent, accessibilityName: String? = nil) -> some View {
         HStack(spacing: 5) {
             Text(label).frame(width: 43, alignment: .leading)
-            Slider(value: value, in: range) { Text(label) }
+            Slider(value: value, in: range) { Text(accessibilityName ?? label) }
                 .labelsHidden().controlSize(.mini).tint(tint)
-                .accessibilityLabel(label)
                 .accessibilityValue(display)
             Text(display).monospacedDigit().frame(width: 43, alignment: .trailing)
                 .accessibilityHidden(true)

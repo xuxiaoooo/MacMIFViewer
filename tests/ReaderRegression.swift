@@ -95,6 +95,7 @@ struct ReaderRegression {
         styles[0].high = 20_000
         styles[0].gamma = 1.8
         styles[1].visible = false
+        styles[0].brightness = 0.5
         try ROIExporter.export(reader: sample, region: roi, format: .raw, settings: styles,
                                solo: 0, destination: url("raw-modified"))
         try ROIExporter.export(reader: sample, region: roi, format: .renderedTiff, settings: styles,
@@ -118,10 +119,20 @@ struct ReaderRegression {
         try check(!crossed.isValid(in: sample.info.base), "reject self-intersecting ROI")
         let mark = ScaleMark(zoom: 0.5, target: 104, calibration: calibration)
         try check(mark?.label == "100 µm" && mark?.width == 100, "scale bar tracks zoom")
+        var tint = styles[0]
+        tint.color = [1, 0.25, 0.5]
+        let dim = tint.mapped(20_000)
+        try check(dim == SIMD3<Float>(0.5, 0.125, 0.25), "brightness dims without changing hue")
+        tint.brightness = 2
+        try check(tint.mapped(20_000) == tint.color, "bright highlights retain hue")
+        tint.brightness = 0
+        try check(tint.mapped(20_000) == .zero, "zero brightness")
         var savedStyles = styles
+        savedStyles[0].brightness = nil
         savedStyles[0].palette = .heat
         try check(savedStyles[0].mapped(20_000) == SIMD3<Float>(1, 1, 1), "heat endpoint")
         savedStyles[0].palette = .grayscale
+        savedStyles[0].brightness = 0.75
         let gray = savedStyles[0].mapped(1000)
         try check(gray.x == gray.y && gray.y == gray.z, "grayscale")
         let annotations = [Annotation(id: UUID(), name: "Tissue edge", region: roi),
