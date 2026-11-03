@@ -195,14 +195,16 @@ struct Workspace: View {
             if model.inspector == .annotations {
                 annotationPanel
             } else {
-                channelPanel
+                channelPanel.id(model.documentID)
             }
         }
         .background(panel)
     }
 
     private var channelPanel: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let document = model.documentID
+        let channels = Array(zip(model.reader?.info.channels ?? [], model.settings))
+        return VStack(alignment: .leading, spacing: 0) {
             HStack {
                 sectionTitle("荧光通道", icon: "circle.hexagongrid.fill")
                 Spacer()
@@ -212,12 +214,21 @@ struct Workspace: View {
             .padding(.horizontal, 13).padding(.vertical, 8)
             ScrollView {
                 VStack(spacing: 5) {
-                    ForEach(model.settings.indices, id: \.self) { row($0) }
+                    ForEach(channels.indices, id: \.self) { index in
+                        let (channel, style) = channels[index]
+                        row(channel, index: index, document: document,
+                            controls: channelControls(index, document: document, fallback: style))
+                    }
                 }.padding(.horizontal, 10)
             }
             Divider()
-            if model.settings.indices.contains(model.selection) {
-                adjustments(model.selection).padding(13)
+            if channels.indices.contains(model.selection) {
+                let index = model.selection
+                let (channel, style) = channels[index]
+                adjustments(channel, index: index, document: document,
+                            controls: channelControls(index, document: document, fallback: style))
+                    .id(index)
+                    .padding(13)
             }
         }
     }
@@ -319,17 +330,23 @@ struct Workspace: View {
         .clipped()
     }
 
-    private func row(_ index: Int) -> some View {
-        let channel = model.reader!.info.channels[index]
-        let style = model.settings[index]
+    private func channelControls(_ index: Int, document: UUID, fallback: DisplayChannel) -> Binding<DisplayChannel> {
+        // SwiftUI can evaluate a disappearing slider after a new slide has been installed.
+        Binding(get: { model.channelStyle(index, in: document) ?? fallback },
+                set: { model.setChannelStyle($0, at: index, in: document) })
+    }
+
+    private func row(_ channel: Channel, index: Int, document: UUID,
+                     controls: Binding<DisplayChannel>) -> some View {
+        let style = controls.wrappedValue
         let brightness = Binding(
-            get: { model.settings[index].brightnessGain },
-            set: { model.settings[index].brightness = $0 }
+            get: { controls.wrappedValue.brightnessGain },
+            set: { controls.brightness.wrappedValue = $0 }
         )
         return VStack(spacing: 5) {
             HStack(spacing: 8) {
                 Button {
-                    model.settings[index].visible.toggle()
+                    controls.visible.wrappedValue.toggle()
                 } label: {
                     Image(systemName: style.visible ? "eye.fill" : "eye.slash")
                         .foregroundStyle(style.visible ? accent : .secondary)
@@ -337,7 +354,7 @@ struct Workspace: View {
                 .buttonStyle(.plain)
                 .help("切换通道可见性")
                 Button {
-                    model.selection = index
+                    if model.documentID == document { model.selection = index }
                 } label: {
                     HStack(spacing: 7) {
                         Circle().fill(swatch(style.color)).frame(width: 8, height: 8)
@@ -351,6 +368,7 @@ struct Workspace: View {
                 }
                 .buttonStyle(.plain)
                 Button(model.solo == index ? "单显中" : "单显") {
+                    guard model.documentID == document else { return }
                     model.solo = model.solo == index ? nil : index
                     model.selection = index
                 }
@@ -371,21 +389,22 @@ struct Workspace: View {
         Color(.sRGB, red: Double(rgb.x), green: Double(rgb.y), blue: Double(rgb.z), opacity: 1)
     }
 
-    private func adjustments(_ i: Int) -> some View {
-        let style = model.settings[i]
-        let color = Binding(get: { swatch(model.settings[i].color) }, set: { color in
+    private func adjustments(_ channel: Channel, index: Int, document: UUID,
+                             controls: Binding<DisplayChannel>) -> some View {
+        let style = controls.wrappedValue
+        let color = Binding(get: { swatch(controls.color.wrappedValue) }, set: { color in
             if let rgb = NSColor(color).usingColorSpace(.sRGB) {
                 let components = [rgb.redComponent, rgb.greenComponent, rgb.blueComponent].map {
                     Float(min(1, max(0, $0)))
                 }
-                model.settings[i].color = SIMD3(components[0], components[1], components[2])
+                controls.color.wrappedValue = SIMD3(components[0], components[1], components[2])
             }
         })
-        let low = Binding(get: { model.settings[i].low }, set: { value in
-            model.settings[i].low = min(value, model.settings[i].high - 1)
+        let low = Binding(get: { controls.low.wrappedValue }, set: { value in
+            controls.low.wrappedValue = min(value, controls.high.wrappedValue - 1)
         })
-        let high = Binding(get: { model.settings[i].high }, set: { value in
-            model.settings[i].high = max(value, model.settings[i].low + 1)
+        let high = Binding(get: { controls.high.wrappedValue }, set: { value in
+            controls.high.wrappedValue = max(value, controls.low.wrappedValue + 1)
         })
         return VStack(alignment: .leading, spacing: 7) {
             HStack {
@@ -395,14 +414,16 @@ struct Workspace: View {
                     Button("自动对比度") { model.autoContrast() }.font(.caption)
                         .disabled(model.overview == nil)
                 }
-                Button("重置") { model.resetChannel(i) }.font(.caption)
+                Button("重置") {
+                    if model.documentID == document { model.resetChannel(index) }
+                }.font(.caption)
             }
-            Picker("映射", selection: $model.settings[i].palette) {
+            Picker("映射", selection: controls.palette) {
                 ForEach(DisplayChannel.Palette.allCases, id: \.self) { Text($0.label).tag($0) }
             }.labelsHidden().pickerStyle(.segmented)
             if style.palette == .tint {
                 HStack {
-                    Text(model.reader?.info.channels[i].name ?? "当前通道")
+                    Text(channel.name)
                         .font(.caption.weight(.semibold)).lineLimit(1)
                     Spacer()
                     ColorPicker("自定义伪彩", selection: color, supportsOpacity: false)
@@ -413,7 +434,7 @@ struct Workspace: View {
                     ForEach(channelPalette.indices, id: \.self) { index in
                         let preset = channelPalette[index]
                         Button {
-                            model.settings[i].color = preset.rgb
+                            controls.color.wrappedValue = preset.rgb
                         } label: {
                             Circle().fill(swatch(preset.rgb))
                                 .frame(width: 14, height: 14)
@@ -431,7 +452,7 @@ struct Workspace: View {
             Divider()
             slider("黑点", value: low, range: 0...style.ceiling, display: String(Int(style.low)))
             slider("白点", value: high, range: 0...style.ceiling, display: String(Int(style.high)))
-            slider("Gamma", value: $model.settings[i].gamma, range: 0.15...4,
+            slider("Gamma", value: controls.gamma, range: 0.15...4,
                    display: String(format: "%.2f", style.gamma))
         }
     }

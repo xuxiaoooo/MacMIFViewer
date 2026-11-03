@@ -32,6 +32,7 @@ final class SlideMetalView: MTKView, MTKViewDelegate {
     }
 
     private weak var model: ViewerModel?
+    private let documentID: UUID
     private var pipeline: MTLRenderPipelineState?
     private var queue: MTLCommandQueue?
     private var dummy: MTLTexture?
@@ -56,6 +57,7 @@ final class SlideMetalView: MTKView, MTKViewDelegate {
 
     init(model: ViewerModel) {
         self.model = model
+        documentID = model.documentID
         let gpu = MTLCreateSystemDefaultDevice()
         super.init(frame: .zero, device: gpu)
         framebufferOnly = true
@@ -89,6 +91,7 @@ final class SlideMetalView: MTKView, MTKViewDelegate {
     func shutdown() {
         task?.cancel()
         task = nil
+        model = nil
         cache.removeAll()
     }
 
@@ -99,14 +102,15 @@ final class SlideMetalView: MTKView, MTKViewDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.pending = false
-            guard let model = self.model, self.bounds.width > 0, self.bounds.height > 0 else { return }
+            guard let model = self.model, model.documentID == self.documentID,
+                  self.bounds.width > 0, self.bounds.height > 0 else { return }
             model.resize(self.bounds.size)
             self.refresh()
         }
     }
 
     func refresh() {
-        guard let model, model.reader != nil else { return }
+        guard let model, model.documentID == documentID, let reader = model.reader else { return }
         if let problem {
             model.reportRenderError(problem)
             return
@@ -116,11 +120,11 @@ final class SlideMetalView: MTKView, MTKViewDelegate {
         lastSettings = model.settings
         lastSolo = model.solo
         if !overviewLoaded, let pixels = model.overview {
-            overview = makeGroup(pixels, channels: model.reader!.info.channels)
+            overview = makeGroup(pixels, channels: reader.info.channels)
             overviewLoaded = true
             redraw = true
         }
-        let keys = visibleTiles(info: model.reader!.info, viewport: model.viewport)
+        let keys = visibleTiles(info: reader.info, viewport: model.viewport)
         if keys != currentKeys {
             currentKeys = keys
             requestTiles()
@@ -130,6 +134,7 @@ final class SlideMetalView: MTKView, MTKViewDelegate {
     }
 
     private func makeTexture(_ data: Data, width: Int, height: Int, type: PixelType) -> MTLTexture? {
+        guard width > 0, height > 0, data.count == width * height * type.bytes else { return nil }
         let desc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: type == .uint16 ? .r16Unorm : .r8Unorm, width: width, height: height, mipmapped: false)
         desc.usage = .shaderRead
@@ -143,6 +148,7 @@ final class SlideMetalView: MTKView, MTKViewDelegate {
     }
 
     private func makeGroup(_ tile: TilePixels, channels: [Channel]) -> GPUGroup? {
+        guard tile.channels.count == channels.count else { return nil }
         let textures = zip(tile.channels, channels).compactMap {
             makeTexture($0, width: tile.width, height: tile.height, type: $1.type)
         }
@@ -180,12 +186,13 @@ final class SlideMetalView: MTKView, MTKViewDelegate {
     }
 
     private func tileFailed(_ message: String, generation token: UUID) {
-        guard generation == token else { return }
-        model?.reportRenderError(message)
+        guard generation == token, let model, model.documentID == documentID else { return }
+        model.reportRenderError(message)
     }
 
     private func accept(_ tile: TilePixels, key: TileKey, generation token: UUID) {
-        guard generation == token, let model, let reader = model.reader else { return }
+        guard generation == token, let model, model.documentID == documentID,
+              let reader = model.reader else { return }
         guard var group = makeGroup(tile, channels: reader.info.channels) else {
             tileFailed("无法分配 Metal tile 纹理。", generation: token)
             return
@@ -207,7 +214,8 @@ final class SlideMetalView: MTKView, MTKViewDelegate {
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
     func draw(in view: MTKView) {
-        guard let model, let pipeline, let queue, let dummy, let drawable = currentDrawable,
+        guard let model, model.documentID == documentID,
+              let pipeline, let queue, let dummy, let drawable = currentDrawable,
               let pass = currentRenderPassDescriptor, let command = queue.makeCommandBuffer(),
               let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { return }
         let vp = model.viewport

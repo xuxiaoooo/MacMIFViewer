@@ -130,6 +130,7 @@ final class ViewerModel: ObservableObject {
     private func install(_ value: any SlideReader, session: URL? = nil) {
         flushSession()
         sessionURL = nil
+        documentID = UUID()
         overviewTask?.cancel()
         cancelROI()
         inspector = .channels
@@ -152,7 +153,6 @@ final class ViewerModel: ObservableObject {
         displayDefaults = DisplayChannel.defaults(value.info)
         settings = displayDefaults
         reader = value
-        documentID = UUID()
         status = "正在生成全片概览"
         if let session {
             do {
@@ -450,6 +450,16 @@ final class ViewerModel: ObservableObject {
     }
 
     func restoreCalibration() { manualCalibration = nil }
+
+    func channelStyle(_ index: Int, in document: UUID) -> DisplayChannel? {
+        guard document == documentID, settings.indices.contains(index) else { return nil }
+        return settings[index]
+    }
+
+    func setChannelStyle(_ style: DisplayChannel, at index: Int, in document: UUID) {
+        guard let old = channelStyle(index, in: document), old != style else { return }
+        settings[index] = style
+    }
 
     func resetChannel(_ index: Int) {
         guard displayDefaults.indices.contains(index) else { return }

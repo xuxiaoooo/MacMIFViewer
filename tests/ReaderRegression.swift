@@ -11,7 +11,8 @@ private func expectError(_ action: () throws -> Void) throws {
 
 @main
 struct ReaderRegression {
-    static func main() throws {
+    @MainActor
+    static func main() async throws {
         let root = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
         func url(_ name: String) -> URL { root.appendingPathComponent(name) }
         let sample = try TiffReader(urls: [url("six.ome.tiff")])
@@ -49,6 +50,32 @@ struct ReaderRegression {
         let jpeg = try TiffReader(urls: [url("jpeg.tiff")])
         let jpegROI = try jpeg.read(channel: 0, level: 0, rect: crop)
         try check(jpegROI.count == 283 * 271, "JPEG TIFF")
+
+        let viewer = ViewerModel()
+        let demoDocument = viewer.documentID
+        guard var oldControl = viewer.channelStyle(5, in: demoDocument) else {
+            throw SlideError.invalid("Missing demo brightness control")
+        }
+        oldControl.brightness = 0.25
+        viewer.setChannelStyle(oldControl, at: 5, in: demoDocument)
+        try check(viewer.channelStyle(5, in: demoDocument)?.brightnessGain == 0.25,
+                  "current slide brightness control")
+        viewer.open([url("jpeg.tiff")])
+        for _ in 0..<100 {
+            if viewer.documentID != demoDocument || viewer.error != nil { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try check(viewer.error == nil && viewer.documentID != demoDocument &&
+                  viewer.settings.count == 1, "switch from six channels to one")
+        try check(viewer.channelStyle(5, in: demoDocument) == nil &&
+                  viewer.channelStyle(0, in: demoDocument) == nil &&
+                  viewer.channelStyle(5, in: viewer.documentID) == nil,
+                  "retired and out-of-range controls cannot read the new slide")
+        viewer.setChannelStyle(oldControl, at: 5, in: demoDocument)
+        viewer.setChannelStyle(oldControl, at: 0, in: demoDocument)
+        try check(viewer.settings[0].brightnessGain == 1, "retired controls cannot edit the new slide")
+        viewer.showDemo()
+
         try expectError { _ = try TiffReader(urls: [url("rgb.tiff")]) }
         try expectError { _ = try TiffReader(urls: [url("synthetic.mrxs")]) }
         let mrxs = try MRXSReader(url: url("synthetic.mrxs"))
