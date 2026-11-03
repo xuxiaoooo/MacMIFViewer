@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mrxs-probe"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "imagecodecs==2026.10.10",
+    "numpy==2.5.4",
+    "tifffile==2026.10.15",
+]
