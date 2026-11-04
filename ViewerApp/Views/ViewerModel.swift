@@ -222,15 +222,22 @@ final class ViewerModel: ObservableObject {
         }
     }
 
-    func flushSession() {
-        guard let url = sessionURL, pendingSave != nil else { return }
+    var canRestartForUpdate: Bool {
+        !opening && exportProgress == nil && editingRegion == nil && draft.isEmpty
+    }
+
+    @discardableResult
+    func flushSession() -> Bool {
+        guard let url = sessionURL, pendingSave != nil else { return true }
         pendingSave?.cancel()
-        pendingSave = nil
         do {
             try SlideSession(settings: settings, annotations: annotations, calibration: manualCalibration,
                              showScale: showScale).save(to: url)
+            pendingSave = nil
+            return true
         } catch {
             status = "本机显示设置或 ROI 保存失败"
+            return false
         }
     }
 

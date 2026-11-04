@@ -88,27 +88,48 @@ final class MRXSReader: SlideReader {
         let ini = try SlideINI(sibling("Slidedat.ini"))
         let general = ini["general"]
         let hier = ini["hierarchical"]
-        let supported = SlideError.invalid("此 MRXS 布局暂不支持直读。目前仅支持单焦平面、无位置偏移的 8-bit 荧光 JPEG 网格。")
+        func unsupported(_ reason: String) -> SlideError {
+            .invalid("此 MRXS 布局暂不支持直读。\n原因：\(reason)\n目前支持单焦平面、无位置偏移的 8-bit 荧光 JPEG 网格。")
+        }
+
+        guard general["slide_type"] == "SLIDE_TYPE_FLUORESCENCE" else {
+            throw unsupported("切片类型不是荧光。")
+        }
+        guard general["vimslide_slide_bitdepth"] == "8" else {
+            throw unsupported("位深不是 8-bit，或缺少位深字段。")
+        }
+        guard Int(general["cameraimagedivisionsperside"] ?? "1") == 1,
+              Double(general["camera_rotation"] ?? "0") == 0 else {
+            throw unsupported("相机图像分块或旋转方式不受支持。")
+        }
         let expected = ["slide zoom level", "slide zoom mask level2", "slide filter level", "microscope focus level"]
-        guard general["slide_type"] == "SLIDE_TYPE_FLUORESCENCE",
-              general["vimslide_slide_bitdepth"] == "8",
-              Int(general["cameraimagedivisionsperside"] ?? "1") == 1,
-              Double(general["camera_rotation"] ?? "0") == 0,
-              hier["hier_count"] == "4",
+        guard hier["hier_count"] == "4",
               expected.enumerated().allSatisfy({ hier["hier_\($0.offset)_name"]?.lowercased() == $0.element }),
               hier["hier_1_count"] == "2", hier["hier_1_val_0"] == "ZoomMaskDefault",
-              hier["hier_1_val_1"] == "ZoomMaskData",
-              hier["hier_3_count"] == "1", hier["hier_3_val_0"] == "ExtFocusLevel",
-              let n = hier["nonhier_count"].flatMap(Int.init), (0...16).contains(n),
-              (0..<n).allSatisfy({ ["VIMSLIDE_HISTOGRAM_DATA", "Scan data layer"].contains(hier["nonhier_\($0)_name"] ?? "") }),
-              let nx = general["imagenumber_x"].flatMap(Int.init), (1...8192).contains(nx),
+              hier["hier_1_val_1"] == "ZoomMaskData" else {
+            throw unsupported("图像金字塔或掩膜的层级结构不同。")
+        }
+        guard hier["hier_3_count"] == "1", hier["hier_3_val_0"] == "ExtFocusLevel" else {
+            throw unsupported("焦平面结构不同。")
+        }
+        guard let n = hier["nonhier_count"].flatMap(Int.init), (0...16).contains(n),
+              (0..<n).allSatisfy({ ["VIMSLIDE_HISTOGRAM_DATA", "Scan data layer"].contains(hier["nonhier_\($0)_name"] ?? "") }) else {
+            throw unsupported("辅助数据层结构不同，可能包含位置偏移或其他扩展。")
+        }
+        guard let nx = general["imagenumber_x"].flatMap(Int.init), (1...8192).contains(nx),
               let ny = general["imagenumber_y"].flatMap(Int.init), (1...8192).contains(ny), nx * ny <= 1_000_000,
-              let depth = hier["hier_0_count"].flatMap(Int.init), (1...16).contains(depth),
-              let filters = hier["hier_2_count"].flatMap(Int.init), (1...8).contains(filters),
-              let id = general["slide_id"], !id.isEmpty, id.utf8.count <= 128 else { throw supported }
+              let depth = hier["hier_0_count"].flatMap(Int.init), (1...16).contains(depth) else {
+            throw unsupported("图像网格尺寸或金字塔级数超出支持范围。")
+        }
+        guard let filters = hier["hier_2_count"].flatMap(Int.init), (1...8).contains(filters) else {
+            throw unsupported("荧光通道数不在 1–8 范围内。")
+        }
+        guard let id = general["slide_id"], !id.isEmpty, id.utf8.count <= 128 else {
+            throw SlideError.invalid("MRXS 切片标识字段无效。")
+        }
 
         let dataFiles = ini["datafile"]
-        guard let count = dataFiles["file_count"].flatMap(Int.init), (1...1024).contains(count) else { throw supported }
+        guard let count = dataFiles["file_count"].flatMap(Int.init), (1...1024).contains(count) else { throw unsupported("数据文件计数超出支持范围。") }
         let urls = try (0..<count).map { try sibling(dataFiles["file_\($0)"]) }
         let sizes = try urls.map { file -> Int in
             guard let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 0 else {
@@ -118,7 +139,7 @@ final class MRXSReader: SlideReader {
         }
         let index = try boundedFile(sibling(hier["indexfile"]), limit: 32 << 20)
         let signature = Data(("01.02" + id).utf8)
-        guard index.starts(with: signature) else { throw supported }
+        guard index.starts(with: signature) else { throw unsupported("索引签名与支持的版本或切片标识不匹配。") }
         let damaged = SlideError.invalid("MRXS 索引损坏，或数据块位置超出文件范围。")
 
         var map: [Mapping] = []
@@ -129,7 +150,7 @@ final class MRXSReader: SlideReader {
             guard storage.hasPrefix("FilterLevel_"),
                   let group = Int(storage.dropFirst("FilterLevel_".count)), (0..<filters).contains(group),
                   let slot = section["storing_channel_number"].flatMap(Int.init), (0...2).contains(slot),
-                  section["zstack_step_count"] == "0" else { throw supported }
+                  section["zstack_step_count"] == "0" else { throw unsupported("通道组映射或 Z 层结构不同。") }
             // Candidate BGR slot order was cross-checked on the supplied IPP JPEG variant.
             map.append(Mapping(group: group, slot: 2 - slot))
             func color(_ prefix: String) -> SIMD3<Float>? {
@@ -145,14 +166,14 @@ final class MRXSReader: SlideReader {
                                     display: ChannelDisplay(color: palette, gamma: gamma,
                                                             visible: section["active"]?.uppercased() != "OFF")))
         }
-        guard Set(map).count == filters else { throw supported }
+        guard Set(map).count == filters else { throw unsupported("多个通道引用了同一存储分量。") }
 
         let groups = Set(map.map(\.group)).sorted()
         var grids: [GridLevel] = []
         var imageLevels: [Level] = []
         let first = ini[hier["hier_0_val_0_section"] ?? ""]
         guard let baseW = first["digitizer_width"].flatMap(Int.init), (16...512).contains(baseW),
-              let baseH = first["digitizer_height"].flatMap(Int.init), (16...512).contains(baseH) else { throw supported }
+              let baseH = first["digitizer_height"].flatMap(Int.init), (16...512).contains(baseH) else { throw unsupported("底层 JPEG 图块尺寸超出支持范围。") }
         var step = 1
         try index.withUnsafeBytes { raw in
             func int(_ offset: Int) throws -> Int {
@@ -169,14 +190,16 @@ final class MRXSReader: SlideReader {
             for level in 0..<depth {
                 try Task.checkCancellation()
                 let section = ini[hier["hier_0_val_\(level)_section"] ?? ""]
-                guard section["image_format"]?.uppercased() == "JPEG",
-                      Int(section["digitizer_width"] ?? "") == baseW,
+                guard section["image_format"]?.uppercased() == "JPEG" else {
+                    throw unsupported("第 \(level) 级图块使用其他编码。")
+                }
+                guard Int(section["digitizer_width"] ?? "") == baseW,
                       Int(section["digitizer_height"] ?? "") == baseH,
                       Double(section["overlap_x"] ?? "") == 0, Double(section["overlap_y"] ?? "") == 0,
-                      section["image_concat_factor"] == (level == 0 ? "0" : "1") else { throw supported }
+                      section["image_concat_factor"] == (level == 0 ? "0" : "1") else { throw unsupported("第 \(level) 级图块的尺寸、重叠或拼接方式不同。") }
                 if level > 0 { step *= 2 }
                 let width = nx * baseW / step, height = ny * baseH / step
-                guard width > 0, height > 0 else { throw supported }
+                guard width > 0, height > 0 else { throw unsupported("金字塔尺寸无效。") }
 
                 var records: [Int: [Int: Block]] = [:]
                 for group in groups {

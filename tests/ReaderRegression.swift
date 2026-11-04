@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 private func check(_ predicate: @autoclosure () -> Bool, _ message: String) throws {
@@ -15,6 +16,47 @@ struct ReaderRegression {
     static func main() async throws {
         let root = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
         func url(_ name: String) -> URL { root.appendingPathComponent(name) }
+        let assets = [
+            ReleaseUpdate.Release.Asset(name: "Mac-MIF-Viewer-0.3.10-arm64.zip", size: 1024, state: "uploaded"),
+            ReleaseUpdate.Release.Asset(name: "Mac-MIF-Viewer-0.3.10-arm64.zip.sig", size: 64, state: "uploaded"),
+        ]
+        let release = ReleaseUpdate.Release(tag_name: "v0.3.10", draft: false, prerelease: false, assets: assets)
+        let available = try release.update(after: "0.3.9")
+        let alreadyInstalled = try release.update(after: "0.3.10")
+        let newerInstalled = try release.update(after: "0.4.0")
+        try check(available?.archive.absoluteString ==
+                  ReleaseUpdate.repository + "/releases/download/v0.3.10/Mac-MIF-Viewer-0.3.10-arm64.zip",
+                  "numeric release ordering and arm64 asset selection")
+        try check(alreadyInstalled == nil && newerInstalled == nil, "no downgrade or reinstall")
+        let prerelease = ReleaseUpdate.Release(tag_name: "v0.3.10", draft: false, prerelease: true, assets: assets)
+        let preview = try prerelease.update(after: "0.3.9")
+        try check(preview == nil, "skip prereleases")
+        let unsigned = ReleaseUpdate.Release(tag_name: "v0.3.10", draft: false, prerelease: false, assets: [assets[0]])
+        try expectError { _ = try unsigned.update(after: "0.3.9") }
+
+        let archive = url("update-archive")
+        let payload = Data("archive".utf8)
+        let signingKey = Curve25519.Signing.PrivateKey()
+        let key = signingKey.publicKey.rawRepresentation.base64EncodedString()
+        let signature = try signingKey.signature(for: payload)
+        try payload.write(to: archive)
+        try ReleaseUpdate.verify(archive, signature: signature, key: key)
+        try Data("tampered".utf8).write(to: archive)
+        try expectError { try ReleaseUpdate.verify(archive, signature: signature, key: key) }
+
+        let unsupported = url("unsupported.mrxs")
+        try Data([0]).write(to: unsupported)
+        try FileManager.default.createDirectory(at: unsupported.deletingPathExtension(), withIntermediateDirectories: false)
+        let ini = "[GENERAL]\nSLIDE_TYPE=SLIDE_TYPE_FLUORESCENCE\nVIMSLIDE_SLIDE_BITDEPTH=16\n"
+        try ini.write(to: unsupported.deletingPathExtension().appendingPathComponent("Slidedat.ini"),
+                      atomically: true, encoding: .utf8)
+        do {
+            _ = try MRXSReader(url: unsupported)
+            throw SlideError.invalid("Unsupported MRXS was opened")
+        } catch {
+            try check(error.localizedDescription.contains("位深"), "MRXS diagnostic identifies unsupported bit depth")
+        }
+
         let sample = try TiffReader(urls: [url("six.ome.tiff")])
         try check(sample.info.channels.count == 6, "channel count")
         try check(sample.info.channels[5].name == "Test 5", "channel label")
